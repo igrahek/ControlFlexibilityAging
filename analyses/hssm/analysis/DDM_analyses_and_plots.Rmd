@@ -1,0 +1,1767 @@
+---
+title: "Plotting subject-level posteriors"
+author: "Ivan Grahek"
+date: "08/05/2025"
+output:
+  html_document:
+    code_folding: hide
+    theme: default
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+# knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width = 6, fig.height = 6)
+```
+
+
+# Load the data and the packages
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+# clear the environment
+rm(list=ls()) 
+#load packages and install them if they're not installed
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(plyr,tidyverse, lme4,MASS,sjPlot,coefplot,cowplot,psych,rmarkdown,knitr,kable,cowplot,viridis,RColorBrewer,simr,scales)
+
+# set seed
+set.seed(42) 
+
+# Functions
+test.params <- function(df) {
+  inner_join(inner_join(inner_join(df %>%
+                                     map_dfr(mean) %>%
+                                     gather(parameter, estimate, everything()) %>% dplyr::rename(Mean=estimate),
+                                   df %>%
+                                     map_dfr(sd) %>%
+                                     gather(parameter, estimate, everything()) %>% dplyr::rename(SD=estimate),by='parameter'),
+                        
+                        df %>% map(~ .x > 0) %>% 
+                          map_dfr(mean) %>%
+                          gather(parameter, pvalue, everything()) %>%
+                          mutate(pvalue = if_else(round(pvalue)==1, 1-pvalue, pvalue),
+                                 sig = if_else(pvalue < 0.001, "***",
+                                               if_else(pvalue < 0.01, "**",
+                                                       if_else(pvalue < 0.05, "*", "n.s."))))),
+             inner_join(df %>%
+                          map_dfr(function(x) return(quantile(x,0.975)[[1]])) %>%
+                          gather(parameter, estimate, everything()) %>% dplyr::rename(CI_upper=estimate),
+                        df %>% map_dfr(function(x) return(quantile(x,0.025)[[1]])) %>%
+                          gather(parameter, estimate, everything()) %>% dplyr::rename(CI_lower=estimate),by='parameter'),by='parameter') 
+}
+
+# Define the summary posterior function
+summarize_posterior <- function(V1,V2,effect) {
+   post = as.data.frame(V1-V2)
+   ggplot(data=post,aes(x=`V1 - V2`)) + 
+     geom_histogram(bins=50) + 
+     geom_vline(xintercept=0, linetype="dotted",size=1) + 
+     labs(title=paste(effect,"p<0 = ",length(post[post<0])/length(post$`V1 - V2`))) +
+     theme_classic() 
+
+}
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+# Base template
+gg <- list(
+  theme_bw(),
+  theme(plot.title = element_text(hjust = 0.5, size=13),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.spacing = unit(0.75, "lines"),
+        legend.box.spacing = unit(0.5, "lines"),
+        legend.position = "bottom",
+        legend.margin = margin(c(0, 0, 0, 0), unit='lines'))
+)
+
+# Density template
+ggdensity <- list(
+  gg,
+  theme(panel.spacing = unit(0.25, "lines"),
+        legend.key.size = unit(0.7, "lines"),
+        legend.direction = "horizontal",
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
+        legend.box.spacing = unit(0.25, "lines"))
+)
+
+```
+
+
+# Group-level costs (Figure 1D)
+
+## Group-level interaction (left panel)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying.csv")
+
+  
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Accuracy_Fixed',
+                                                'v_Accuracy_Varying',
+                                                'v_Speed_Fixed',
+                                                'v_Speed_Varying'))
+
+threshold<- output %>% filter(parameter %in% c('a_Accuracy_Fixed',
+                                                'a_Accuracy_Varying',
+                                                'a_Speed_Fixed',
+                                                'a_Speed_Varying'))
+
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','factor','fixed'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$factor = as.factor(va$factor)
+
+va$fixed = as.factor(c("Fixed","Fixed","Varying","Varying","Fixed","Fixed","Varying","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(factor,fixed),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$factor = c("Speed", "Accuracy","Speed","Accuracy")
+
+data$factor = factor(data$factor, levels = c("Speed", "Accuracy"))
+# levels(data$factor) = c("Speed", "Accuracy")
+# data$factor = c("Speed", "Accuracy","Speed & Accuracy" )
+
+p<-ggplot(data,aes(x=Mean_Drift, y=Mean_Threshold,colour = factor,shape = fixed)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+
+Fig1D_1 = p
+
+
+```
+
+## Posterior distribution (right panel)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying.csv")
+
+# Cost calculation
+Distance_Fixed = sqrt((traces$v_Accuracy_Fixed - traces$v_Speed_Fixed)**2 + (traces$a_Accuracy_Fixed - traces$a_Speed_Fixed)**2)
+Distance_Varying = sqrt((traces$v_Accuracy_Varying - traces$v_Speed_Varying)**2 + (traces$a_Accuracy_Varying - traces$a_Speed_Varying)**2)
+Cost = Distance_Fixed - Distance_Varying
+
+output <- test.params(as.data.frame(Cost))
+
+#---------------------------------------------------------------------
+# Posterior plot
+#---------------------------------------------------------------------
+
+# Compute the mean
+mean_cost <- mean(as.data.frame(Cost)$Cost)
+mean_label <- sprintf("Mean = %.2f", mean_cost)
+
+# Plot
+p = ggplot(as.data.frame(Cost), aes(x = Cost)) +
+  geom_density(alpha = 0.8, fill = "grey60") +
+  geom_vline(xintercept = mean_cost, linetype = "dashed", color = "black", size = 1) +
+  annotate("text", x = mean_cost, y = 9.8, label = mean_label, 
+           hjust = +0.8, size = 10, color = "black") + 
+  labs(x = "Cost",
+       y = "Density") + 
+  coord_cartesian(xlim = c(0, 0.6), ylim = c(0, 10)) +
+  scale_y_continuous(breaks = seq(0, 9, 3))+
+  theme(
+        plot.margin = grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+        text = element_text(size = 33, color = "black"),
+        panel.border = element_rect(colour = "black", fill = NA),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color = "black"),
+        axis.text.y = element_text(color = "black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+
+Fig1D_2 = p
+
+
+# Stats
+output <- test.params(as.data.frame(Cost))
+output
+
+
+```
+
+# 2D plots - Main effects (Figure 2 A & C)
+
+## Young (25)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_young"))
+
+colnames(traces) = gsub("_young$", "", colnames(traces))
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Fixed',
+                                                'v_Varying',
+                                                'v_Accuracy',
+                                                'v_Speed'))
+
+threshold<- output %>% filter(parameter %in% c('a_Fixed',
+                                                'a_Varying',
+                                                'a_Accuracy',
+                                                'a_Speed'))
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','condition'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$condition = as.factor(c("Speed","Accuracy","Fixed","Varying","Speed","Accuracy","Fixed","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+# data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(condition),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$condition = c("Speed", "Accuracy","Fixed","Varying")
+
+data$condition = factor(data$condition, levels = c("Speed", "Accuracy","Fixed","Varying"))
+
+data_speed_accuracy <- data %>%
+  filter(condition %in% c("Speed", "Accuracy"))
+
+data_fixed_varying <- data %>%
+  filter(condition %in% c("Fixed", "Varying"))
+
+p<-ggplot(data_speed_accuracy,aes(x=Mean_Drift, y=Mean_Threshold,colour = condition)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2C_1 = p
+
+p<-ggplot(data_fixed_varying,aes(x=Mean_Drift, y=Mean_Threshold, shape=condition)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+
+Fig2A_1 = p
+
+
+```
+
+## Middle (45)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_middle"))
+
+colnames(traces) = gsub("_middle$", "", colnames(traces))
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Fixed',
+                                                'v_Varying',
+                                                'v_Accuracy',
+                                                'v_Speed'))
+
+threshold<- output %>% filter(parameter %in% c('a_Fixed',
+                                                'a_Varying',
+                                                'a_Accuracy',
+                                                'a_Speed'))
+
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','condition'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$condition = as.factor(c("Speed","Accuracy","Fixed","Varying","Speed","Accuracy","Fixed","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+# data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(condition),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$condition = c("Speed", "Accuracy","Fixed","Varying")
+
+data$condition = factor(data$condition, levels = c("Speed", "Accuracy","Fixed","Varying"))
+
+data_speed_accuracy <- data %>%
+  filter(condition %in% c("Speed", "Accuracy"))
+
+data_fixed_varying <- data %>%
+  filter(condition %in% c("Fixed", "Varying"))
+
+p<-ggplot(data_speed_accuracy,aes(x=Mean_Drift, y=Mean_Threshold,colour = condition)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2C_2 = p
+
+p<-ggplot(data_fixed_varying,aes(x=Mean_Drift, y=Mean_Threshold, shape=condition)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2A_2 = p
+```
+
+## Old (65)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_old"))
+
+colnames(traces) = gsub("_old$", "", colnames(traces))
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Fixed',
+                                                'v_Varying',
+                                                'v_Accuracy',
+                                                'v_Speed'))
+
+threshold<- output %>% filter(parameter %in% c('a_Fixed',
+                                                'a_Varying',
+                                                'a_Accuracy',
+                                                'a_Speed'))
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','condition'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$condition = as.factor(c("Speed","Accuracy","Fixed","Varying","Speed","Accuracy","Fixed","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+# data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(condition),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$condition = c("Speed", "Accuracy","Fixed","Varying")
+
+data$condition = factor(data$condition, levels = c("Speed", "Accuracy","Fixed","Varying"))
+
+data_speed_accuracy <- data %>%
+  filter(condition %in% c("Speed", "Accuracy"))
+
+data_fixed_varying <- data %>%
+  filter(condition %in% c("Fixed", "Varying"))
+
+p<-ggplot(data_speed_accuracy,aes(x=Mean_Drift, y=Mean_Threshold,colour = condition)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2C_3 = p
+
+p<-ggplot(data_fixed_varying,aes(x=Mean_Drift, y=Mean_Threshold, shape=condition)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2A_3 = p
+```
+
+
+# 2D plots - Interaction (Figure 2 E)
+
+
+## Young (25)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_young"))
+
+colnames(traces) = gsub("_young$", "", colnames(traces))
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Accuracy_Fixed',
+                                                'v_Accuracy_Varying',
+                                                'v_Speed_Fixed',
+                                                'v_Speed_Varying'))
+
+threshold<- output %>% filter(parameter %in% c('a_Accuracy_Fixed',
+                                                'a_Accuracy_Varying',
+                                                'a_Speed_Fixed',
+                                                'a_Speed_Varying'))
+
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','factor','fixed'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$factor = as.factor(va$factor)
+
+va$fixed = as.factor(c("Fixed","Fixed","Varying","Varying","Fixed","Fixed","Varying","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(factor,fixed),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$factor = c("Speed", "Accuracy","Speed","Accuracy")
+
+data$factor = factor(data$factor, levels = c("Speed", "Accuracy"))
+# levels(data$factor) = c("Speed", "Accuracy")
+# data$factor = c("Speed", "Accuracy","Speed & Accuracy" )
+
+p<-ggplot(data,aes(x=Mean_Drift, y=Mean_Threshold,colour = factor,shape = fixed)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+Fig2E_1 = p
+```
+
+## Middle (45)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_middle"))
+
+colnames(traces) = gsub("_middle$", "", colnames(traces))
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Accuracy_Fixed',
+                                                'v_Accuracy_Varying',
+                                                'v_Speed_Fixed',
+                                                'v_Speed_Varying'))
+
+threshold<- output %>% filter(parameter %in% c('a_Accuracy_Fixed',
+                                                'a_Accuracy_Varying',
+                                                'a_Speed_Fixed',
+                                                'a_Speed_Varying'))
+
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','factor','fixed'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$factor = as.factor(va$factor)
+
+va$fixed = as.factor(c("Fixed","Fixed","Varying","Varying","Fixed","Fixed","Varying","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(factor,fixed),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$factor = c("Speed", "Accuracy","Speed","Accuracy")
+
+data$factor = factor(data$factor, levels = c("Speed", "Accuracy"))
+# levels(data$factor) = c("Speed", "Accuracy")
+# data$factor = c("Speed", "Accuracy","Speed & Accuracy" )
+
+p<-ggplot(data,aes(x=Mean_Drift, y=Mean_Threshold,colour = factor,shape = fixed)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+Fig2E_2 = p
+```
+
+## Old (65)
+
+```{r, message=FALSE}
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_old"))
+
+colnames(traces) = gsub("_old$", "", colnames(traces))
+
+output <- test.params(traces)
+
+drift.rate<- output %>% filter(parameter %in% c('v_Accuracy_Fixed',
+                                                'v_Accuracy_Varying',
+                                                'v_Speed_Fixed',
+                                                'v_Speed_Varying'))
+
+threshold<- output %>% filter(parameter %in% c('a_Accuracy_Fixed',
+                                                'a_Accuracy_Varying',
+                                                'a_Speed_Fixed',
+                                                'a_Speed_Varying'))
+
+
+va <- rbind(drift.rate,threshold) %>% separate(parameter,c('parameter','factor','fixed'),'_')
+
+labels <- c('Threshold','Drift')
+
+va$factor = as.factor(va$factor)
+
+va$fixed = as.factor(c("Fixed","Fixed","Varying","Varying","Fixed","Fixed","Varying","Varying"))
+
+va$parameter<-factor(va$parameter,labels=c('Threshold','Drift Rate'))
+
+data = va
+
+data$parameter = c("Drift","Drift","Drift","Drift","Threshold","Threshold","Threshold","Threshold")
+data$factor = c("Speed","Accuracy","Speed","Accuracy","Speed","Accuracy","Speed","Accuracy")
+
+# Long to wide
+data = pivot_wider(data = data, 
+            id_cols = c(factor,fixed),
+            names_from = parameter, 
+            values_from = c("Mean","CI_lower","CI_upper"))
+
+data$factor = c("Speed", "Accuracy","Speed","Accuracy")
+
+data$factor = factor(data$factor, levels = c("Speed", "Accuracy"))
+# levels(data$factor) = c("Speed", "Accuracy")
+# data$factor = c("Speed", "Accuracy","Speed & Accuracy" )
+
+p<-ggplot(data,aes(x=Mean_Drift, y=Mean_Threshold,colour = factor,shape = fixed)) +
+  geom_point(size=6) +
+  # geom_line(aes(group=fixed),linewidth=1, color="black")+
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(xmin=CI_lower_Drift,xmax=CI_upper_Drift)) +
+  geom_errorbar(width=0, size=1.1, position=position_dodge(width = .6),aes(ymin=CI_lower_Threshold,ymax=CI_upper_Threshold))+
+  scale_color_viridis(discrete = TRUE ,option = "plasma",end=0.7)+
+  ylab("Threshold") + 
+  xlab("Drift Rate") + 
+  scale_y_continuous(limits = c(0.7,1.4))+
+  scale_x_continuous(limits = c(2,3.1))+
+
+  theme(
+        plot.margin=grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0),color="black"),
+        text = element_text(size=33,color = "black"),
+        panel.border = element_rect (colour = "black", fill = F),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color="black"),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+Fig2E_3 = p
+```
+
+
+
+
+
+
+# Cost plots (Figure 2 B & D & F)
+
+## Distance fixed vs. varying main effect (Figure 2B)
+
+```{r, message=FALSE}
+
+#---------------------------------------------------------------------
+# Young
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_young"))
+
+colnames(traces) = gsub("_young$", "", colnames(traces))
+
+# Cost calculation
+# Distance_young = sqrt((traces$v_Varying - traces$v_Fixed)**2 + (traces$a_Varying - traces$a_Fixed)**2)
+Distance_young = (traces$v_Fixed - traces$v_Varying + traces$a_Fixed - traces$a_Varying)/ sqrt(2)
+
+output_young <- test.params(as.data.frame(Distance_young))
+output_young$parameter = "Distance"
+
+output_young$Age = "Young"
+
+#---------------------------------------------------------------------
+# Middle
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_middle"))
+
+colnames(traces) = gsub("_middle$", "", colnames(traces))
+
+# Cost calculation
+# Distance_middle = sqrt((traces$v_Varying - traces$v_Fixed)**2 + (traces$a_Varying - traces$a_Fixed)**2)
+Distance_middle = (traces$v_Fixed - traces$v_Varying + traces$a_Fixed - traces$a_Varying)/ sqrt(2)
+
+
+output_middle <- test.params(as.data.frame(Distance_middle))
+output_middle$parameter = "Distance"
+output_middle$Age = "Middle"
+
+#---------------------------------------------------------------------
+# Old
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_old"))
+
+colnames(traces) = gsub("_old$", "", colnames(traces))
+
+# Cost calculation
+# Distance_old = sqrt((traces$v_Varying - traces$v_Fixed)**2 + (traces$a_Varying - traces$a_Fixed)**2)
+Distance_old = (traces$v_Fixed - traces$v_Varying + traces$a_Fixed - traces$a_Varying)/ sqrt(2)
+
+
+output_old <- test.params(as.data.frame(Distance_old))
+output_old$parameter = "Distance"
+output_old$Age = "Old"
+
+
+#---------------------------------------------------------------------
+# Merge
+#---------------------------------------------------------------------
+output = rbind(output_young,output_middle,output_old)
+output$Age <- factor(output$Age, levels = c("Young", "Middle", "Old"))
+
+output$Age <- factor(output$Age, 
+                     levels = c("Young", "Middle", "Old"), 
+                     labels = c(25, 45, 65))
+
+# Filter to just the 'Cost' parameter, in case other parameters are included
+output_cost <- output %>% filter(parameter == "Distance")
+
+# Bar plot with CI error bars
+grey_colors <- c("25" = "grey85", "45" = "grey60", "65" = "grey45")  # adjust as needed
+
+p = ggplot(output_cost, aes(x = Age, y = Mean, fill = Age)) +
+  geom_col(width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.2) +
+  scale_fill_manual(values = grey_colors) +  # apply grey shades
+  labs(x = "Age Group", y = expression(Delta~"Control Intensity")) +
+  ylim(-0.15,0.8)+
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme(
+        plot.margin = grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+        text = element_text(size = 33, color = "black"),
+        panel.border = element_rect(colour = "black", fill = NA),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color = "black"),
+        axis.text.y = element_text(color = "black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2B = p
+
+
+```
+
+## Distance speed vs. accuracy main effect (Figure 2D)
+
+```{r, message=FALSE}
+#---------------------------------------------------------------------
+# Young
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_young"))
+
+colnames(traces) = gsub("_young$", "", colnames(traces))
+
+# Cost calculation
+Distance_young = sqrt((traces$v_Accuracy - traces$v_Speed)**2 + (traces$a_Accuracy - traces$a_Speed)**2)
+# Distance_young = (traces$v_Accuracy - traces$v_Speed + traces$a_Accuracy - traces$a_Speed)/ sqrt(2)
+
+
+output_young <- test.params(as.data.frame(Distance_young))
+output_young$parameter = "Distance"
+
+output_young$Age = "Young"
+
+#---------------------------------------------------------------------
+# Middle
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_middle"))
+
+colnames(traces) = gsub("_middle$", "", colnames(traces))
+
+# Cost calculation
+Distance_middle = sqrt((traces$v_Accuracy - traces$v_Speed)**2 + (traces$a_Accuracy - traces$a_Speed)**2)
+# Distance_middle = (traces$v_Accuracy - traces$v_Speed + traces$a_Accuracy - traces$a_Speed)/ sqrt(2)
+
+
+output_middle <- test.params(as.data.frame(Distance_middle))
+output_middle$parameter = "Distance"
+output_middle$Age = "Middle"
+
+#---------------------------------------------------------------------
+# Old
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_old"))
+
+colnames(traces) = gsub("_old$", "", colnames(traces))
+
+# Cost calculation
+Distance_old = sqrt((traces$v_Accuracy - traces$v_Speed)**2 + (traces$a_Accuracy - traces$a_Speed)**2)
+# Distance_old = (traces$v_Accuracy - traces$v_Speed + traces$a_Accuracy - traces$a_Speed)/ sqrt(2)
+
+output_old <- test.params(as.data.frame(Distance_old))
+output_old$parameter = "Distance"
+output_old$Age = "Old"
+
+
+#---------------------------------------------------------------------
+# Merge
+#---------------------------------------------------------------------
+output = rbind(output_young,output_middle,output_old)
+output$Age <- factor(output$Age, levels = c("Young", "Middle", "Old"))
+
+output$Age <- factor(output$Age, 
+                     levels = c("Young", "Middle", "Old"), 
+                     labels = c(25, 45, 65))
+
+
+# Filter to just the 'Cost' parameter, in case other parameters are included
+output_cost <- output %>% filter(parameter == "Distance")
+
+
+# Bar plot with CI error bars
+grey_colors <- c("25" = "grey85", "45" = "grey60", "65" = "grey45")  # adjust as needed
+
+p = ggplot(output_cost, aes(x = Age, y = Mean, fill = Age)) +
+  geom_col(width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.2) +
+  scale_fill_manual(values = grey_colors) +  # apply grey shades
+  labs(x = "Age Group", y = "Distance") +
+  ylim(-0.15,0.8)+
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme(
+        plot.margin = grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+        text = element_text(size = 33, color = "black"),
+        panel.border = element_rect(colour = "black", fill = NA),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color = "black"),
+        axis.text.y = element_text(color = "black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2D = p
+
+
+```
+
+## Cost barplot (Figure 2F)
+
+```{r, message=FALSE}
+
+#---------------------------------------------------------------------
+# Young
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_young"))
+
+colnames(traces) = gsub("_young$", "", colnames(traces))
+
+# Cost calculation
+Distance_Fixed = sqrt((traces$v_Accuracy_Fixed - traces$v_Speed_Fixed)**2 + (traces$a_Accuracy_Fixed - traces$a_Speed_Fixed)**2)
+Distance_Varying = sqrt((traces$v_Accuracy_Varying - traces$v_Speed_Varying)**2 + (traces$a_Accuracy_Varying - traces$a_Speed_Varying)**2)
+Cost_young = Distance_Fixed - Distance_Varying
+
+output_young <- test.params(as.data.frame(Cost_young))
+output_young$parameter = "Cost"
+output_young$Age = "Young"
+
+#---------------------------------------------------------------------
+# Middle
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_middle"))
+
+colnames(traces) = gsub("_middle$", "", colnames(traces))
+
+# Cost calculation
+Distance_Fixed = sqrt((traces$v_Accuracy_Fixed - traces$v_Speed_Fixed)**2 + (traces$a_Accuracy_Fixed - traces$a_Speed_Fixed)**2)
+Distance_Varying = sqrt((traces$v_Accuracy_Varying - traces$v_Speed_Varying)**2 + (traces$a_Accuracy_Varying - traces$a_Speed_Varying)**2)
+Cost_middle = Distance_Fixed - Distance_Varying
+
+output_middle <- test.params(as.data.frame(Cost_middle))
+output_middle$parameter = "Cost"
+
+output_middle$Age = "Middle"
+
+#---------------------------------------------------------------------
+# Old
+#---------------------------------------------------------------------
+
+traces = read_csv("Posteriors_FixedVarying_SpecificAges.csv")
+
+traces =  traces %>%
+  dplyr::select(ends_with("_old"))
+
+colnames(traces) = gsub("_old$", "", colnames(traces))
+
+# Cost calculation
+Distance_Fixed = sqrt((traces$v_Accuracy_Fixed - traces$v_Speed_Fixed)**2 + (traces$a_Accuracy_Fixed - traces$a_Speed_Fixed)**2)
+Distance_Varying = sqrt((traces$v_Accuracy_Varying - traces$v_Speed_Varying)**2 + (traces$a_Accuracy_Varying - traces$a_Speed_Varying)**2)
+Cost_old = Distance_Fixed - Distance_Varying
+
+output_old <- test.params(as.data.frame(Cost_old))
+output_old$parameter = "Cost"
+output_old$Age = "Old"
+
+
+#---------------------------------------------------------------------
+# Merge
+#---------------------------------------------------------------------
+output = rbind(output_young,output_middle,output_old)
+output$Age <- factor(output$Age, levels = c("Young", "Middle", "Old"))
+
+output$Age <- factor(output$Age, 
+                     levels = c("Young", "Middle", "Old"), 
+                     labels = c(25, 45, 65))
+
+# Filter to just the 'Cost' parameter, in case other parameters are included
+output_cost <- output %>% filter(parameter == "Cost")
+
+# Bar plot with CI error bars
+grey_colors <- c("25" = "grey85", "45" = "grey60", "65" = "grey45")  # adjust as needed
+
+p = ggplot(output_cost, aes(x = Age, y = Mean, fill = Age)) +
+  geom_col(width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.2) +
+  scale_fill_manual(values = grey_colors) +  # apply grey shades
+  labs(x = "Age Group", y = expression(Delta~Distance)) +
+  ylim(-0.038,0.6)+
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme(
+        plot.margin = grid::unit(c(5,5,5,5), "mm"),
+        axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+        text = element_text(size = 33, color = "black"),
+        panel.border = element_rect(colour = "black", fill = NA),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.text.x = element_text(color = "black"),
+        axis.text.y = element_text(color = "black"),
+        axis.ticks = element_line(color = "black"),
+        legend.position = "none")  
+
+p
+Fig2F = p
+
+```
+
+
+# Calculate distances and costs
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(readr)
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+### Costs
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+df.costs = read_csv("DDM_SubjectLevel.csv")
+df.costs <- df.costs %>% dplyr::rename(subj_idx=subject)
+
+# First pivot wider to get the structure we need
+df.costs.diff <- df.costs %>%
+  pivot_wider(names_from = c(condition, block_type), values_from = c(v, a))
+
+# Now calculate costs by subject with within-subject normalization
+df.costs.diff <- df.costs %>%
+  group_by(subj_idx) %>%
+  summarize(
+    age = first(age), # Assuming age is constant per subject
+    
+    # Extract the needed values first
+    v_Accuracy_Fixed = v[condition == "Accuracy" & block_type == "Fixed"],
+    v_Speed_Fixed = v[condition == "Speed" & block_type == "Fixed"],
+    v_Accuracy_Varying = v[condition == "Accuracy" & block_type == "Varying"],
+    v_Speed_Varying = v[condition == "Speed" & block_type == "Varying"],
+    a_Accuracy_Fixed = a[condition == "Accuracy" & block_type == "Fixed"],
+    a_Speed_Fixed = a[condition == "Speed" & block_type == "Fixed"],
+    a_Accuracy_Varying = a[condition == "Accuracy" & block_type == "Varying"],
+    a_Speed_Varying = a[condition == "Speed" & block_type == "Varying"]
+  ) %>%
+  rowwise() %>%
+  mutate(
+    # Subject-specific min/max for normalization
+    v_min = min(v_Accuracy_Fixed, v_Speed_Fixed, v_Accuracy_Varying, v_Speed_Varying, na.rm = TRUE),
+    v_max = max(v_Accuracy_Fixed, v_Speed_Fixed, v_Accuracy_Varying, v_Speed_Varying, na.rm = TRUE),
+    a_min = min(a_Accuracy_Fixed, a_Speed_Fixed, a_Accuracy_Varying, a_Speed_Varying, na.rm = TRUE),
+    a_max = max(a_Accuracy_Fixed, a_Speed_Fixed, a_Accuracy_Varying, a_Speed_Varying, na.rm = TRUE),
+    
+    # Normalize within subject
+    v_Accuracy_Fixed_norm = (v_Accuracy_Fixed - v_min) / (v_max - v_min),
+    v_Speed_Fixed_norm = (v_Speed_Fixed - v_min) / (v_max - v_min),
+    v_Accuracy_Varying_norm = (v_Accuracy_Varying - v_min) / (v_max - v_min),
+    v_Speed_Varying_norm = (v_Speed_Varying - v_min) / (v_max - v_min),
+    a_Accuracy_Fixed_norm = (a_Accuracy_Fixed - a_min) / (a_max - a_min),
+    a_Speed_Fixed_norm = (a_Speed_Fixed - a_min) / (a_max - a_min),
+    a_Accuracy_Varying_norm = (a_Accuracy_Varying - a_min) / (a_max - a_min),
+    a_Speed_Varying_norm = (a_Speed_Varying - a_min) / (a_max - a_min),
+    
+    # Calculate distances using subject-normalized values
+    dist_speed_acc_fix = sqrt((v_Accuracy_Fixed_norm - v_Speed_Fixed_norm)^2 + 
+                             (a_Accuracy_Fixed_norm - a_Speed_Fixed_norm)^2),
+    
+    Distance_Varying = sqrt((v_Accuracy_Varying_norm - v_Speed_Varying_norm)^2 + 
+                          (a_Accuracy_Varying_norm - a_Speed_Varying_norm)^2),
+    
+    # Calculate cost
+    cost = dist_speed_acc_fix - Distance_Varying,
+    
+    signed_dist_fix = (v_Accuracy_Fixed_norm - v_Speed_Fixed_norm + 
+                      a_Accuracy_Fixed_norm - a_Speed_Fixed_norm) / sqrt(2),
+    
+    signed_dist_varying = (v_Accuracy_Varying_norm - v_Speed_Varying_norm + 
+                          a_Accuracy_Varying_norm - a_Speed_Varying_norm) / sqrt(2),
+    
+    # Calculate cost using signed distances
+    cost_signed = signed_dist_fix - signed_dist_varying
+  ) %>%
+  ungroup()
+
+df.age.costs = df.costs.diff
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+### Speed-Accuracy distance
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+df.costs = read_csv("DDM_SubjectLevel_Speed_Accuracy.csv")
+df.costs <- df.costs %>% dplyr::rename(subj_idx=subject)
+
+# Calculate speed-accuracy distance by subject - without normalization
+df.costs.diff <- df.costs %>%
+  group_by(subj_idx) %>%
+  summarize(
+    age = first(age), # Assuming age is constant per subject
+    
+    # Extract values
+    v_Accuracy = v[condition == "Accuracy"],
+    v_Speed = v[condition == "Speed"],
+    a_Accuracy = a[condition == "Accuracy"],
+    a_Speed = a[condition == "Speed"],
+    
+    
+    # Calculate distance using raw values (no normalization)
+    dist_speed_acc = sqrt((v_Accuracy - v_Speed)^2 + 
+                        (a_Accuracy - a_Speed)^2),
+    
+    # Compute signed distance along the main diagonal axis
+    signed_dist_speed_acc = (v_Accuracy - v_Speed + a_Accuracy - a_Speed) / sqrt(2)
+    
+  ) %>%
+  ungroup()
+
+df.age.speed_acc = df.costs.diff
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+### Fixed-Varying distance
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+df.costs = read_csv("DDM_SubjectLevel_Fixed_Varying.csv")
+df.costs <- df.costs %>% dplyr::rename(subj_idx=subject)
+
+# Calculate fixed-varying distance by subject - without normalization
+df.costs.diff <- df.costs %>%
+  group_by(subj_idx) %>%
+  summarize(
+    age = first(age), # Assuming age is constant per subject
+    
+    # Extract values
+    v_Fixed = v[condition == "Fixed"],
+    v_Varying = v[condition == "Varying"],
+    a_Fixed = a[condition == "Fixed"],
+    a_Varying = a[condition == "Varying"],
+    
+    # Calculate distance using raw values (no normalization)
+    dist_fix_var = sqrt((v_Fixed - v_Varying)^2 + 
+                      (a_Fixed - a_Varying)^2),
+    
+    # Compute signed distance along the main diagonal axis
+    signed_dist_fix_var = (v_Fixed - v_Varying + a_Fixed - a_Varying) / sqrt(2)
+    
+  ) %>%
+  ungroup()
+
+df.age.fix_var = df.costs.diff
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+### Congruency - Drift
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+df.costs = read_csv("DDM_SubjectLevel_Congruency.csv")
+df.costs <- df.costs %>% dplyr::rename(subj_idx=subject)
+
+# Calculate fixed-varying distance by subject - without normalization
+df.costs.diff <- df.costs %>%
+  group_by(subj_idx) %>%
+  summarize(
+    age = first(age), # Assuming age is constant per subject
+    v_congruency = v_congruency,
+    z_congruency = z_congruency
+  ) %>%
+  ungroup()
+
+df.age.congruency = df.costs.diff
+
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+### Merge into a single df
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Create the final dataframe with all metrics
+df <- df.age.costs %>%
+  dplyr::select(subj_idx, age, cost, cost_signed,dist_speed_acc_fix) %>%
+  left_join(df.age.fix_var %>% dplyr::select(subj_idx, dist_fix_var, signed_dist_fix_var), by = "subj_idx") %>%
+  left_join(df.age.speed_acc %>% dplyr::select(subj_idx, dist_speed_acc, signed_dist_speed_acc), by = "subj_idx") %>%
+  left_join(df.age.congruency %>% dplyr::select(subj_idx, v_congruency, z_congruency), by = "subj_idx")
+
+
+# Z-score and also save the age in years
+df$age_years = df$age
+df$age = as.numeric(scale(df$age, scale= TRUE, center = TRUE))
+
+
+```
+
+
+# Stats for distances and costs (Figure S2)
+
+## Fit the models
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+library(MASS)
+library(brms)
+
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# ### Fit the cost model
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# model.cost = brm(cost ~ age,
+#                         data=df,
+#                         iter  = 4000,
+#                         warmup = 2000,
+#                         save_pars=save_pars(all=TRUE),
+#                         cores = 4)
+# saveRDS(model.cost,file="model_cost_for_stats.rds")
+# 
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# ### Fit the cost model
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# model.cost = brm(cost ~ age_years,
+#                         data=df,
+#                         iter  = 4000,
+#                         warmup = 2000,
+#                         save_pars=save_pars(all=TRUE),
+#                         cores = 4)
+# saveRDS(model.cost,file="model_cost_for_plots.rds")
+# 
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# ### Fit the speed-acc distance model
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# model.cost = brm(dist_speed_acc ~ age_years,
+#                                   data=df,
+#                                   iter  = 4000,
+#                                   warmup = 2000,
+#                                   save_pars=save_pars(all=TRUE),
+#                                   cores = 4)
+# saveRDS(model.cost,file="model_dist_speed_acc_for_plots.rds")
+# 
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# ### Fit the speed-acc distance model
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# model.cost = brm(dist_speed_acc ~ age,
+#                                   data=df,
+#                                   iter  = 4000,
+#                                   warmup = 2000,
+#                                   save_pars=save_pars(all=TRUE),
+#                                   cores = 4)
+# saveRDS(model.cost,file="model_dist_speed_acc_for_stats.rds")
+# 
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# ### Fit the fix-var signed distance model
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# model.cost = brm(signed_dist_fix_var ~ age,
+#                                 data=df,
+#                                 iter  = 4000,
+#                                 warmup = 2000,
+#                                 save_pars=save_pars(all=TRUE),
+#                                 cores = 4)
+# saveRDS(model.cost,file="model_signed_dist_fix_var_for_stats.rds")
+# 
+# 
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# ### Fit the fix-var signed distance model
+# #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# model.cost = brm(signed_dist_fix_var ~ age_years,
+#                                 data=df,
+#                                 iter  = 4000,
+#                                 warmup = 2000,
+#                                 save_pars=save_pars(all=TRUE),
+#                                 cores = 4)
+# saveRDS(model.cost,file="model_signed_dist_fix_var_for_plots.rds")
+
+
+```
+
+## Summarize the models
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+
+library(MASS)
+library(brms)
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+### Analyze a model
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+model.signed_cost = readRDS("model_cost_for_stats.rds")
+model.signed_speed_acc = readRDS("model_dist_speed_acc_for_stats.rds")
+model.signed_fix_var = readRDS("model_signed_dist_fix_var_for_stats.rds")
+
+# Define calculate the posterior probabilities function
+posterior_probabilities <- function(model) {
+   parameter_names = rownames(summary(model)[["fixed"]])
+   post_prob = rep(0,length(parameter_names))
+   for (i in 1:length(parameter_names)){
+     t = hypothesis(model,paste0(parameter_names[i],"<0"))
+     post_prob[i] = t$hypothesis$Post.Prob
+   }
+  return(post_prob)
+}
+
+#------------------------------------------
+# Cost model
+#------------------------------------------
+x=summary(model.signed_cost)[["fixed"]]
+x$`HDI(95%)` = paste(format(round(x$`l-95% CI`, 2), nsmall = 2), format(round(x$`u-95% CI`, 2), nsmall = 2), sep=", ")
+x$`l-95% CI` = NULL
+x$`u-95% CI` = NULL
+x$Bulk_ESS = NULL
+x$Rhat = NULL
+x$Tail_ESS = NULL
+
+# add a row name column
+names = rownames(x)
+x = cbind(names,x)
+rownames(x) = NULL
+
+# add a row name column
+# turn into numeric to round
+x$Estimate = as.numeric(x$Estimate)
+x$Est.Error = as.numeric(x$Est.Error)
+
+# calculate the posterior probabilities
+x$PostProb = posterior_probabilities(model.signed_cost)
+
+# edit the column names
+print('Cost model')
+kable(x,digits = 2,col.names = c("Parameter", "Estimate", "SE", "CI (95%)","p<0"),align = "lrrrr")
+
+#------------------------------------------
+# Accuracy-Speed model distance
+#------------------------------------------
+
+x=summary(model.signed_speed_acc)[["fixed"]]
+x$`HDI(95%)` = paste(format(round(x$`l-95% CI`, 2), nsmall = 2), format(round(x$`u-95% CI`, 2), nsmall = 2), sep=", ")
+x$`l-95% CI` = NULL
+x$`u-95% CI` = NULL
+x$Bulk_ESS = NULL
+x$Rhat = NULL
+x$Tail_ESS = NULL
+
+# add a row name column
+names = rownames(x)
+x = cbind(names,x)
+rownames(x) = NULL
+
+# add a row name column
+# turn into numeric to round
+x$Estimate = as.numeric(x$Estimate)
+x$Est.Error = as.numeric(x$Est.Error)
+
+# calculate the posterior probabilities
+x$PostProb = posterior_probabilities(model.signed_speed_acc)
+
+# edit the column names
+print('Accuracy-Speed model (distance')
+kable(x,digits = 2,col.names = c("Parameter", "Estimate", "SE", "CI (95%)","p<0"),align = "lrrrr")
+
+
+#------------------------------------------
+# Fix-Varying model (signed distance)
+#------------------------------------------
+
+x=summary(model.signed_fix_var)[["fixed"]]
+x$`HDI(95%)` = paste(format(round(x$`l-95% CI`, 2), nsmall = 2), format(round(x$`u-95% CI`, 2), nsmall = 2), sep=", ")
+x$`l-95% CI` = NULL
+x$`u-95% CI` = NULL
+x$Bulk_ESS = NULL
+x$Rhat = NULL
+x$Tail_ESS = NULL
+
+# add a row name column
+names = rownames(x)
+x = cbind(names,x)
+rownames(x) = NULL
+
+# add a row name column
+# turn into numeric to round
+x$Estimate = as.numeric(x$Estimate)
+x$Est.Error = as.numeric(x$Est.Error)
+
+# calculate the posterior probabilities
+x$PostProb = posterior_probabilities(model.signed_fix_var)
+
+# edit the column names
+print('Fixed-Varying (signed distance')
+kable(x,digits = 2,col.names = c("Parameter", "Estimate", "SE", "CI (95%)","p<0"),align = "lrrrr")
+
+
+```
+
+## Plots
+
+### Speed-Accuracy (Figure S2A)
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+
+model = readRDS("model_dist_speed_acc_for_plots.rds")
+
+# Create base prediction plot
+p = plot_model(model, type = "pred", terms = "age_years")
+
+# Replace the ribbon layer with a new one
+p$layers[[1]] = NULL  # Remove the original ribbon layer
+p = p + geom_ribbon(aes(ymin = conf.low, ymax = conf.high), 
+                     fill = "gray", alpha = 0.7)
+
+# Add data points and customize
+p = p + 
+  scale_fill_manual(values = "gray") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "gray", alpha = 0.7) +
+  # Add data points
+  geom_point(data = df, 
+             aes(x = age_years, y = dist_speed_acc),
+             color = "black", 
+             alpha = 0.35,
+             size = 1.5) +
+  geom_line(color = "black", size = 1.5) +
+
+  # Remove title and customize labels
+  labs(
+    title = NULL,  # This removes the automatic title
+    x = "Age (years)",
+    y = "Distance"
+  ) +
+  
+  
+  scale_y_continuous(labels = scales::label_number(accuracy = 1), 
+                     limits = c(-0.1, 3)) +
+  
+  # Apply theme customizations
+  theme(
+    # Border and background elements
+    # 
+    panel.border = element_rect(colour = "black", fill = NA),
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    
+    # Text elements
+    text = element_text(size = 33, color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+    
+    # Other elements
+    axis.ticks = element_line(color = "black"),
+    plot.margin = grid::unit(c(5,5,5,5), "mm"),
+    legend.position = "none"
+  )
+
+# Display the plot
+p
+
+FigS2_1 = p
+
+```
+
+### Varying - Fixed (Figure S2B)
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+
+model = readRDS("model_signed_dist_fix_var_for_plots.rds")
+
+# Create base prediction plot
+p = plot_model(model, type = "pred", terms = "age_years")
+
+# Replace the ribbon layer with a new one
+p$layers[[1]] = NULL  # Remove the original ribbon layer
+p = p + geom_ribbon(aes(ymin = conf.low, ymax = conf.high), 
+                     fill = "gray", alpha = 0.7)
+
+# Add data points and customize
+p = p + 
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "gray", alpha = 0.7) +
+  # Add data points
+  geom_point(data = df, 
+             aes(x = age_years, y = signed_dist_fix_var),
+             color = "black", 
+             alpha = 0.35,
+             size = 1.5) +
+  geom_line(color = "black", size = 1.5) +
+
+  # Remove title and customize labels
+  labs(
+    title = NULL,  # This removes the automatic title
+    x = "Age (years)",
+    y = expression(Delta~"Control Intensity")
+  ) +
+  
+  
+  scale_y_continuous(labels = scales::label_number(accuracy = 1), 
+                     limits = c(-1.6, 1.5)) +
+  
+  # Apply theme customizations
+  theme(
+    # Border and background elements
+    # 
+    panel.border = element_rect(colour = "black", fill = NA),
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    
+    # Text elements
+    text = element_text(size = 33, color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+    
+    # Other elements
+    axis.ticks = element_line(color = "black"),
+    plot.margin = grid::unit(c(5,5,5,5), "mm"),
+    legend.position = "none"
+  )
+
+# Display the plot
+p
+
+FigS2_2 = p
+
+```
+
+### Cost (Figure S2 C)
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+
+model = readRDS("model_cost_for_plots.rds")
+
+# Create base prediction plot
+p = plot_model(model, type = "pred", terms = "age_years")
+
+# Replace the ribbon layer with a new one
+p$layers[[1]] = NULL  # Remove the original ribbon layer
+p = p + geom_ribbon(aes(ymin = conf.low, ymax = conf.high), 
+                     fill = "gray", alpha = 0.7)
+
+# Add data points and customize
+p = p + 
+  scale_fill_manual(values = "gray") +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), fill = "gray", alpha = 0.7) +
+  # Add data points
+  geom_point(data = df, 
+             aes(x = age_years, y = cost),
+             color = "black", 
+             alpha = 0.35,
+             size = 1.5) +
+  geom_line(color = "black", size = 1.5) +
+  
+  # Format y-axis to show no decimals
+  scale_y_continuous(labels = scales::label_number(accuracy = 1), 
+                     limits = c(-1.5, 1.5)) +
+
+  # Remove title and customize labels
+  labs(
+    title = NULL,  # This removes the automatic title
+    x = "Age (years)",
+    y = expression(Delta~'Signed Distance')
+  ) +
+  
+  # Apply theme customizations
+  theme(
+    # Border and background elements
+    # 
+    panel.border = element_rect(colour = "black", fill = NA),
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    
+    # Text elements
+    text = element_text(size = 33, color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    axis.title.y = element_text(margin = margin(t = 0, r = 0, b = 0, l = 0), color = "black"),
+    
+    # Other elements
+    axis.ticks = element_line(color = "black"),
+    plot.margin = grid::unit(c(5,5,5,5), "mm"),
+    legend.position = "none"
+  )
+
+# Display the plot
+p
+FigS2_3 = p
+```
+
+
+# Save the figure
+
+```{r,warning=FALSE,echo=FALSE,message=FALSE}
+
+# Figure 1
+pdf(file="../../manuscript/figures/Figure1.pdf",height=5,width=10)
+
+p = cowplot::plot_grid(Fig1D_1,Fig1D_2,
+                       nrow = 1,
+                       ncol = 2)
+p
+dev.off()
+
+# Figure 2
+pdf(file="../../manuscript/figures/Figure2.pdf",height=15,width=20)
+
+p = cowplot::plot_grid(Fig2A_1, Fig2A_2, Fig2A_3, Fig2B,
+                       Fig2C_1, Fig2C_2, Fig2C_3, Fig2D,
+                       Fig2E_1, Fig2E_2, Fig2E_3, Fig2F,
+                       nrow = 3,
+                       ncol = 4)
+p
+dev.off()
+
+# Figure S2
+pdf(file="../../manuscript/figures/FigureS2.pdf",height=5,width=15)
+
+p = cowplot::plot_grid(FigS2_1, FigS2_2,FigS2_3,
+                       nrow = 1,
+                       ncol = 3)
+p
+dev.off()
+
+
+```
