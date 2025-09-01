@@ -1,0 +1,17 @@
+*.rds
+*.db
+*.html
+*.pdf
+*.Rhistory
+
+# Do not upload the downloaded models
+analyses/brms/Cluster/output
+analyses/hssm/output
+
+# Do not upload the data that has personal information
+data/RawData
+
+# Do not upload the manuscript folder
+manuscript/
+
+
