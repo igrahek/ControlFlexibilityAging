@@ -25,7 +25,7 @@ Contains scripts and models for response time, accuracy analyses, and Drift Diff
 
 ### 1.2. `hssm` Folder
 
-**Purpose:** Handles Hierarchical State Space Models (HSSM) and Drift Diffusion Model analyses.
+**Purpose:** Scripts to fit Drift Diffusion Models using the HSSM package.
 
 - **`analysis/`**:
   - **`analyze_models.ipynb`**: Jupyter notebook for analyzing HSSM models and saving posteriors.  
@@ -53,12 +53,15 @@ Contains raw and preprocessed behavioral data.
   - `.csv` file with preprocessed data.
 
 - **`RawData/`**:  
-  - Contains raw data files (not uploaded due to containing sensitive demographic information).
+  - Contains raw data files (not uploaded due demographic information).
 
 ---
 
 ## 3. `preprocessing` Directory
 
-Contains scripts for preprocessing raw data into format suitable for analysis.
+**Purpose:** Scripts for preprocessing raw data into format suitable for analysis.
+
+- **`Preprocessing.R`**: Main script for data preprocessing.
+- **`PreprocessingSummary.csv`**: Summary of the excluded participants and total participant numbers after preprocessing. 
 
 ---
