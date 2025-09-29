@@ -110,7 +110,7 @@ samples = model.sample(
 )
 
 # Save the model
-samples.to_netcdf('../output/Model4')
+samples.to_netcdf('../output/Model2')
 
 
 
