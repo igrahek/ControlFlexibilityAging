@@ -234,12 +234,12 @@ df.trial <- df.trial %>%
 #### Exclude subjects based on interval-level data ####
 
 # Format data frame for interval-level data to do exclusion at the interval level
-df.interval <- df.trial %>% 
-  group_by(uniqueid,SubID,Version,blockNum,intervalNum,intervalLength,intervalType) %>% 
+df.interval <- df.trial %>%
+  group_by(uniqueid,SubID,Version,blockNum,intervalNum,intervalLength,intervalType) %>%
   dplyr::summarise(trialsPerInterval = n(),
-                   IntervalISI = (trialsPerInterval-1)*task_ISI, # Calculate Total ISI per interval 
+                   IntervalISI = (trialsPerInterval-1)*task_ISI, # Calculate Total ISI per interval
                    Interval_Acc=mean(hit,na.rm=T),
-                   Interval_sum_Acc=sum(hit,na.rm=T), 
+                   Interval_sum_Acc=sum(hit,na.rm=T),
                    Interval_AccRT=mean(AccRT,na.rm=T),
                    Interval_devAccRT=((AccRT-Interval_AccRT)/Interval_AccRT),
                    Interval_log10_AccRT=mean(log10_AccRT,na.rm=T),
@@ -263,6 +263,21 @@ df.interval.previous = df.interval %>%
 
 # Add switch repeat variable
 df.interval.previous$Switch = ifelse(df.interval.previous$intervalType==df.interval.previous$previntervalType,"Repeat","Switch")
+
+# Add the "intervals since switch" variable at the INTERVAL level (0 on switch intervals and the
+# first interval of a block, then 1,2,3,... on successive repeat intervals of the same goal).
+# This is the graded version of Switch used by the recovery-curve model (Model4): IntervalsSinceSwitch==0
+# corresponds exactly to Switch=="Switch". NB: named distinctly from the vestigial trial-level
+# `SinceSwitch` created above (lines ~148-154) to avoid a column-name clash in the join below.
+df.interval.previous = df.interval.previous %>%
+  dplyr::group_by(uniqueid,SubID,Version,blockNum) %>%
+  dplyr::arrange(intervalNum, .by_group = TRUE) %>%
+  dplyr::mutate(SwitchPoint = ifelse(is.na(previntervalType) | Switch=="Switch", 1L, 0L),
+                RunGroup = cumsum(SwitchPoint)) %>%
+  dplyr::group_by(uniqueid,SubID,Version,blockNum,RunGroup) %>%
+  dplyr::mutate(IntervalsSinceSwitch = dplyr::row_number() - 1L) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-SwitchPoint, -RunGroup)
 
 # Merge with trial data
 df.trial = plyr::join(df.trial,df.interval.previous, by = c("SubID", "blockNum", "intervalNum"),type="full")
@@ -391,12 +406,13 @@ df.DDM = df.trial %>%
   filter(ErrorType != "random")%>%
   filter(blockType == "Mixed")%>%
   filter(!is.na(Switch))%>%
-  dplyr::select(SubID,trialNum,hit,rt,intervalType,blockType,Switch,congruence,scaledRunningTime,Age,Age_2,Age_Years) %>%
+  dplyr::select(SubID,trialNum,hit,rt,intervalType,blockType,Switch,IntervalsSinceSwitch,congruence,scaledRunningTime,Age,Age_2,Age_Years) %>%
   mutate(rt=rt/1000,
          response=hit,
+         SinceSwitch=pmin(IntervalsSinceSwitch,4),  # cap at 4 ("4+"); long same-goal runs are rare and would have high leverage
          congruency=ifelse(congruence==1,"congruent","incongruent")) %>%
   rename(subj_idx=SubID) %>% # this threw error "Error in rename(., subj_idx = SubID) : unused argument (subj_idx = SubID)"
-  dplyr::select(-hit,-congruence)
+  dplyr::select(-hit,-congruence,-IntervalsSinceSwitch)
 
 df.DDM$response = ifelse(df.DDM$response==1,1,-1)
 
