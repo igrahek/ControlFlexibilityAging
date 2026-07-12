@@ -57,7 +57,7 @@ model = hssm.HSSM(
             "name": "z",
             "formula": "z ~ 1 + congruency + (1 + congruency | subj_idx)",
             "prior": {
-                "Intercept": {"name": "Weibull", "alpha": 1.5, "beta": 0.3, "initval": 0.5},
+                "Intercept": {"name": "Beta", "alpha": 5, "beta": 5, "initval": 0.5},
                 "congruency": {"name": "Normal", "mu": 0, "sigma": 0.2, "initval": 0},
                 "1|subj_idx": {"name": "Normal", "mu": 0, "sigma": {"name": "Weibull", "alpha": 1.5, "beta": 0.3}},
                 "congruency|subj_idx": {"name": "Normal", "mu": 0, "sigma": {"name": "Weibull", "alpha": 1.5, "beta": 0.3}}
@@ -68,7 +68,7 @@ model = hssm.HSSM(
             "name": "a",
             "formula": "a ~ 1 + intervalType * Switch * Age + scaledRunningTime + (1 + scaledRunningTime + intervalType * Switch | subj_idx)",
             "prior": {
-                "Intercept": {"name": "Gamma", "mu": 0.5, "sigma": 1.75, "initval": 1},
+                "Intercept": {"name": "Gamma", "mu": 1.5, "sigma": 1.0, "initval": 1},
                 "intervalType": {"name": "Normal", "mu": 0, "sigma": 1, "initval": 0},
                 "Switch": {"name": "Normal", "mu": 0, "sigma": 1, "initval": 0},
                 "Age": {"name": "Normal", "mu": 0, "sigma": 1, "initval": 0},
